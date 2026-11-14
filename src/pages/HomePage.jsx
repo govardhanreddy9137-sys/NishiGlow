@@ -1,5 +1,5 @@
 import React from 'react';
-import { BRAND, FAQS, createEmailLink } from '../data/siteData';
+import { BRAND, FAQS, createEmailLink, discountedPrice, DISCOUNT_PERCENT } from '../data/siteData';
 import { useStudioData } from '../context/StudioDataContext';
 import { 
   Sparkles, 
@@ -30,6 +30,9 @@ const iconMap = {
 
 export default function HomePage({ setActivePage, setSelectedCategory }) {
   const { portfolioItems, services } = useStudioData();
+  const startingPrice = Math.min(...services.flatMap(service =>
+    service.pricing.map(price => discountedPrice(price.price))
+  ));
 
   const handleServiceSelect = (serviceId) => {
     setActivePage('services');
@@ -117,8 +120,8 @@ export default function HomePage({ setActivePage, setSelectedCategory }) {
               <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">Digital & Online</p>
             </div>
             <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/15 backdrop-blur-sm">
-              <p className="text-2xl sm:text-3xl font-extrabold text-cyan-400">₹79</p>
-              <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">Pricing Starts From</p>
+              <p className="text-2xl sm:text-3xl font-extrabold text-cyan-400">₹{startingPrice}</p>
+              <p className="text-xs text-slate-400 uppercase tracking-wider mt-1">Starting price after 10% off</p>
             </div>
             <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/15 backdrop-blur-sm">
               <p className="text-2xl sm:text-3xl font-extrabold text-emerald-400">All India</p>
@@ -221,7 +224,8 @@ export default function HomePage({ setActivePage, setSelectedCategory }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {services.map((srv) => {
             const Icon = iconMap[srv.icon] || Sparkles;
-            const minPrice = Math.min(...srv.pricing.map(p => p.price));
+            const minPrice = Math.min(...srv.pricing.map(p => discountedPrice(p.price)));
+            const listedMinPrice = Math.min(...srv.pricing.map(p => p.price));
 
             return (
               <div
@@ -250,8 +254,11 @@ export default function HomePage({ setActivePage, setSelectedCategory }) {
                   {/* Pricing preview */}
                   <div className="mt-5 p-3 rounded-xl bg-purple-950/30 border border-purple-500/15">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-400">Starting from</span>
-                      <span className="text-base font-extrabold text-cyan-300">₹{minPrice}</span>
+                      <span className="text-xs text-slate-400">Starting from <span className="text-emerald-300">{DISCOUNT_PERCENT}% off</span></span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500 line-through">₹{listedMinPrice}</span>
+                        <span className="text-base font-extrabold text-cyan-300">₹{minPrice}</span>
+                      </span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
                       {srv.pricing.length} tailored duration/format packages available
@@ -392,7 +399,7 @@ export default function HomePage({ setActivePage, setSelectedCategory }) {
               </div>
               <h3 className="text-lg font-bold text-white">Affordable & Transparent</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                No hidden costs or bloated agency charges. Honest beginner-friendly pricing starting from just ₹79.
+                No hidden costs or bloated agency charges. Get 10% off every service, with prices starting from ₹{startingPrice}.
               </p>
             </div>
 

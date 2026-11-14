@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BRAND, createEmailLink } from '../data/siteData';
+import { BRAND, createEmailLink, discountedPrice, DISCOUNT_PERCENT } from '../data/siteData';
 import { useStudioData } from '../context/StudioDataContext';
 import { 
   Sparkles, 
@@ -42,7 +42,7 @@ export default function ServicesPage({ setActivePage, setContactPrefill }) {
   };
 
   const getServiceEmailLink = (serviceTitle, itemDesc, price) => {
-    const body = `Hello ${BRAND.name},\n\nI would like to order:\nService: ${serviceTitle}\nPlan: ${itemDesc} (₹${price})\n\nPlease let me know the details.`;
+    const body = `Hello ${BRAND.name},\n\nI would like to order:\nService: ${serviceTitle}\nPlan: ${itemDesc}\nListed price: ₹${price}\n${DISCOUNT_PERCENT}% discount: ₹${price - discountedPrice(price)}\nOffer price: ₹${discountedPrice(price)}\n\nPlease let me know the details.`;
     return createEmailLink(`Order enquiry: ${serviceTitle}`, body);
   };
 
@@ -69,6 +69,8 @@ export default function ServicesPage({ setActivePage, setContactPrefill }) {
 
         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 border border-purple-500/30 text-xs text-slate-300">
           <span className="text-pink-400 font-bold">100% Online Services</span>
+          <span>•</span>
+          <span className="text-emerald-400 font-bold">{DISCOUNT_PERCENT}% off every service</span>
           <span>•</span>
           <span className="text-cyan-400 font-bold">Gmail & Instagram Contact</span>
           <span>•</span>
@@ -196,7 +198,7 @@ export default function ServicesPage({ setActivePage, setContactPrefill }) {
                 <span>{activeService.title} – Price List</span>
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                CREATIVE • PROFESSIONAL • AFFORDABLE
+                CREATIVE • PROFESSIONAL • {DISCOUNT_PERCENT}% OFF EVERY SERVICE
               </p>
             </div>
 
@@ -227,7 +229,8 @@ export default function ServicesPage({ setActivePage, setContactPrefill }) {
                         {p.label}
                       </td>
                       <td className="py-3.5 px-4 text-right font-extrabold text-cyan-300 text-sm sm:text-base">
-                        ₹{p.price}
+                        <span className="mr-2 text-xs font-medium text-slate-500 line-through">₹{p.price}</span>
+                        ₹{discountedPrice(p.price)}
                       </td>
                       <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
@@ -241,7 +244,7 @@ export default function ServicesPage({ setActivePage, setContactPrefill }) {
                           </a>
 
                           <button
-                            onClick={() => handleEnquireService(activeService.title, `${titleKey} (₹${p.price})`)}
+                            onClick={() => handleEnquireService(activeService.title, `${titleKey} (10% off: ₹${discountedPrice(p.price)})`)}
                             className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
                           >
                             Enquire
@@ -296,7 +299,10 @@ export default function ServicesPage({ setActivePage, setContactPrefill }) {
                     {service.pricing.map((item, idx) => (
                       <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-slate-800/50">
                         <span className="text-slate-300">{item.duration || item.service}</span>
-                        <span className="font-bold text-cyan-300">₹{item.price}</span>
+                        <span className="text-right">
+                          <span className="block text-[10px] text-slate-500 line-through">₹{item.price}</span>
+                          <span className="font-bold text-cyan-300">₹{discountedPrice(item.price)}</span>
+                        </span>
                       </div>
                     ))}
                   </div>

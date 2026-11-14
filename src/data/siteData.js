@@ -10,6 +10,9 @@ export const BRAND = {
   serviceCoverage: "All Across India"
 };
 
+export const DISCOUNT_PERCENT = 10;
+export const discountedPrice = price => Math.round(Number(price) * (1 - DISCOUNT_PERCENT / 100));
+
 export const createEmailLink = (subject, body) =>
   `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(BRAND.email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
@@ -31,7 +34,7 @@ export const INITIAL_SERVICES = [
       { service: "AI Promotional Video", price: 1000, label: "Custom creative for your brand" }
     ],
     samplePlaceholder: "/images/nishi-studio-main-poster.jpg",
-    sampleVideo: "/videos/video_1_nishi.mp4",
+    sampleVideo: "/videos/nishiglow-ai.mp4",
     portfolioCount: 18
   },
   {
@@ -296,7 +299,7 @@ export const INITIAL_PORTFOLIO_ITEMS = [
     badge: "Official Studio Video",
     desc: "Dynamic high-definition AI promotional commercial created by NISHIGLOWSTUDIO for creative branding.",
     image: "/images/nishi-studio-main-poster.jpg",
-    videoUrl: "/videos/video_1_nishi.mp4",
+    videoUrl: "/videos/nishiglow-ai.mp4",
     clientType: "Studio Original Showcase",
     deliveryTime: "24 Hours",
     isOriginal: true,
@@ -407,6 +410,10 @@ export const FAQS = [
   {
     q: "Can I request revisions if I need changes?",
     a: "Yes! We work collaboratively with you to ensure your satisfaction. Minor revisions in text, color schemes, audio, and pacing are handled promptly."
+  },
+  {
+    q: "Can I bargain on the service price?",
+    a: "Every service already includes 10% off the listed price. Tell us about your requirements and budget through the chatbot or email, and we can discuss a suitable package. The standard discount is up to 10%."
   },
   {
     q: "How will I receive the final files?",

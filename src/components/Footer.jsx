@@ -1,8 +1,10 @@
 import React from 'react';
-import { BRAND, createEmailLink } from '../data/siteData';
+import { BRAND, createEmailLink, discountedPrice, DISCOUNT_PERCENT } from '../data/siteData';
+import { useStudioData } from '../context/StudioDataContext';
 import { Mail, Camera, Sparkles, CheckCircle2 } from 'lucide-react';
 
 export default function Footer({ setActivePage }) {
+  const { services } = useStudioData();
   const handleNav = (page) => {
     setActivePage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -79,13 +81,16 @@ export default function Footer({ setActivePage }) {
             <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-200 mb-4">
               Creative Offerings
             </h4>
+            <p className="mb-2 text-xs font-semibold text-emerald-300">{DISCOUNT_PERCENT}% off every service</p>
             <ul className="space-y-2 text-xs text-slate-400">
-              <li className="hover:text-white transition-colors">• AI Promotional Video (₹1000)</li>
-              <li className="hover:text-white transition-colors">• Video Editing (from ₹149)</li>
-              <li className="hover:text-white transition-colors">• Poster Designing (from ₹99)</li>
-              <li className="hover:text-white transition-colors">• Logo Designing (from ₹199)</li>
-              <li className="hover:text-white transition-colors">• YouTube Thumbnails (from ₹79)</li>
-              <li className="hover:text-white transition-colors">• Business Card Designing (from ₹149)</li>
+              {services.map(service => {
+                const startingPrice = Math.min(...service.pricing.map(price => discountedPrice(price.price)));
+                return (
+                  <li key={service.id} className="hover:text-white transition-colors">
+                    • {service.title} (from ₹{startingPrice})
+                  </li>
+                );
+              })}
             </ul>
           </div>
 

@@ -1,12 +1,11 @@
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import { randomInt, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import dotenv from 'dotenv';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
-import nodemailer from 'nodemailer';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -17,9 +16,6 @@ const app = express();
 const PORT = Number(process.env.PORT) || 5000;
 const SESSION_COOKIE = 'nishiglow_session';
 const SESSION_DURATION_SECONDS = 7 * 24 * 60 * 60;
-const OTP_DURATION_MS = 10 * 60 * 1000;
-const OTP_RESEND_WAIT_MS = 60 * 1000;
-const MAX_OTP_ATTEMPTS = 5;
 const MIN_PASSWORD_LENGTH = 12;
 const scryptAsync = promisify(scrypt);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,7 +29,6 @@ app.use(express.json({ limit: '16kb' }));
 app.use(cookieParser());
 
 let isMongoConnected = false;
-let isSmtpConnected = false;
 const connectDatabase = () => mongoose.connect(process.env.MONGODB_URI, {
   serverSelectionTimeoutMS: 5000
 }).then(() => {
@@ -46,6 +41,7 @@ const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   picture: { type: String, default: '' },
   role: { type: String, enum: ['Client', 'Admin'], default: 'Client' },
+  phone: { type: String, default: '' },
   serviceInterest: { type: String, default: '' },
   passwordHash: { type: String, select: false },
   lastLoginAt: { type: Date, default: Date.now }
@@ -63,46 +59,8 @@ const OrderSchema = new mongoose.Schema({
   paymentMethod: { type: String, default: 'Not recorded' }
 }, { timestamps: true });
 
-const OtpSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-  codeHash: { type: String, required: true },
-  expiresAt: { type: Date, required: true, expires: 0 },
-  attempts: { type: Number, default: 0 },
-  lastSentAt: { type: Date, required: true }
-});
-
 const UserModel = mongoose.models.User || mongoose.model('User', UserSchema);
-const OtpModel = mongoose.models.EmailOtp || mongoose.model('EmailOtp', OtpSchema);
 const OrderModel = mongoose.models.StudioOrder || mongoose.model('StudioOrder', OrderSchema);
-
-const mailer = process.env.GMAIL_USER && process.env.GMAIL_PASS
-  ? nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_PASS
-      },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 20000
-    })
-  : null;
-
-const requestOtpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 5,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { success: false, message: 'Too many code requests. Please try again later.' }
-});
-
-const verifyOtpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { success: false, message: 'Too many code attempts. Please try again later.' }
-});
 
 const passwordLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -120,34 +78,25 @@ const getSessionCookieOptions = () => ({
   path: '/'
 });
 
-const getOtpHash = (email, code) => createHmac('sha256', process.env.SESSION_SECRET)
-  .update(`${email}:${code}`)
-  .digest('hex');
-
-const getAdminEmails = () => new Set(
-  [
-    process.env.ADMIN_EMAILS,
-    process.env.ADMIN_EMAIL,
-    'nishiglowstudio@gmail.com,nishitanishi045@gmail.com,nishita@gmail.com'
-  ]
-    .filter(Boolean)
-    .join(',')
-    .split(',')
-    .map(address => address.trim().toLowerCase())
-    .filter(Boolean)
-);
+const getAdminEmails = () => new Set(['nishiglowstudio@gmail.com']);
 
 const isValidEmail = (email) =>
   typeof email === 'string'
   && email.length <= 254
   && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-const isValidPassword = (password) =>
+const normalizePhone = phone => typeof phone === 'string' && /^[+\d\s().-]+$/.test(phone.trim())
+  ? phone.trim().replace(/[^\d+]/g, '')
+  : '';
+
+const isValidPhone = phone => /^\+?\d{7,15}$/.test(phone);
+
+const isValidPassword = password =>
   typeof password === 'string'
   && password.length >= MIN_PASSWORD_LENGTH
   && password.length <= 128;
 
-const hashPassword = async (password) => {
+const hashPassword = async password => {
   const salt = randomBytes(16);
   const derivedKey = await scryptAsync(password, salt, 64);
   return `scrypt$${salt.toString('base64url')}$${derivedKey.toString('base64url')}`;
@@ -164,14 +113,6 @@ const verifyPassword = async (password, passwordHash) => {
     && actualKey.length === expectedKey.length
     && timingSafeEqual(expectedKey, actualKey);
 };
-
-const authConfigurationMissing = () => (
-  !mailer
-  || !process.env.GMAIL_USER
-  || !process.env.GMAIL_PASS
-  || !process.env.SESSION_SECRET
-  || process.env.SESSION_SECRET.length < 32
-);
 
 const issueSession = (res, user) => {
   const sessionToken = jwt.sign(
@@ -233,9 +174,10 @@ const publicOrder = order => ({
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
-    emailOtpConfigured: Boolean(mailer && process.env.SESSION_SECRET?.length >= 32),
-    databaseConnected: isMongoConnected,
-    smtpConnected: isSmtpConnected
+    authenticationConfigured: Boolean(
+      process.env.SESSION_SECRET?.length >= 32 && process.env.ADMIN_PASSWORD_HASH
+    ),
+    databaseConnected: isMongoConnected
   });
 });
 
@@ -402,78 +344,65 @@ app.delete('/api/admin/orders/:id', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/auth/otp/request', requestOtpLimiter, async (req, res) => {
+app.post('/api/auth/register', passwordLoginLimiter, async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const phone = normalizePhone(req.body?.phone);
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  const passwordConfirmation = typeof req.body?.passwordConfirmation === 'string'
+    ? req.body.passwordConfirmation
+    : '';
+  const serviceInterest = typeof req.body?.serviceInterest === 'string'
+    ? req.body.serviceInterest.trim().slice(0, 120)
+    : '';
 
-  if (!isValidEmail(email)) {
-    return res.status(400).json({ success: false, message: 'Enter a valid email address.' });
-  }
-  if (authConfigurationMissing()) {
-    return res.status(503).json({
+  if (!isValidEmail(email) || !isValidPhone(phone) || !isValidPassword(password)) {
+    return res.status(400).json({
       success: false,
-      message: 'Email sign-in is not configured. Add the Gmail App Password to GMAIL_PASS in .env, then restart the backend.'
+      message: `Enter a valid email, phone number, and password between ${MIN_PASSWORD_LENGTH} and 128 characters.`
     });
+  }
+  if (password !== passwordConfirmation) {
+    return res.status(400).json({ success: false, message: 'The passwords do not match.' });
+  }
+  if (getAdminEmails().has(email)) {
+    return res.status(403).json({ success: false, message: 'Use the studio admin sign-in for this email address.' });
+  }
+  if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+    return res.status(503).json({ success: false, message: 'Sign-in is temporarily unavailable. Please try again later.' });
   }
   if (!isMongoConnected) {
     return res.status(503).json({ success: false, message: 'Account storage is unavailable. Please try again later.' });
   }
 
   try {
-    const previousOtp = await OtpModel.findOne({ email });
-    const waitRemaining = previousOtp
-      ? OTP_RESEND_WAIT_MS - (Date.now() - previousOtp.lastSentAt.getTime())
-      : 0;
-    if (waitRemaining > 0) {
-      return res.status(429).json({
-        success: false,
-        message: `Please wait ${Math.ceil(waitRemaining / 1000)} seconds before requesting another code.`
-      });
-    }
-
-    const code = randomInt(0, 1000000).toString().padStart(6, '0');
-    const sentAt = new Date();
-    await OtpModel.findOneAndUpdate(
+    const existingUser = await UserModel.findOne({ email }).select('+passwordHash');
+    const userUpdates = {
+      name: existingUser?.name || email.split('@')[0],
+      role: 'Client',
+      phone,
+      passwordHash: await hashPassword(password),
+      lastLoginAt: new Date()
+    };
+    if (serviceInterest) userUpdates.serviceInterest = serviceInterest;
+    const user = await UserModel.findOneAndUpdate(
       { email },
-      {
-        email,
-        codeHash: getOtpHash(email, code),
-        expiresAt: new Date(sentAt.getTime() + OTP_DURATION_MS),
-        attempts: 0,
-        lastSentAt: sentAt
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { $set: userUpdates },
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
-
-    try {
-      await mailer.sendMail({
-        from: `"NISHIGLOWSTUDIO" <${process.env.GMAIL_USER}>`,
-        to: email,
-        subject: 'Your NISHIGLOWSTUDIO password setup code',
-        text: `Your verification code is ${code}. It expires in 10 minutes. Use it to set or reset your website password. If you did not request this code, you can ignore this email.`,
-        html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#1f2937"><h2 style="color:#7c3aed">NISHIGLOWSTUDIO</h2><p>Use this one-time code to set or reset your website password:</p><p style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#7c3aed">${code}</p><p>This code expires in 10 minutes. If you did not request it, you can ignore this email.</p></div>`
-      });
-      isSmtpConnected = true;
-    } catch (error) {
-      await OtpModel.deleteOne({ email, codeHash: getOtpHash(email, code) });
-      console.error('[Email OTP] Gmail delivery failed:', error.message);
-      return res.status(503).json({
-        success: false,
-        message: 'We could not send the verification email. Check the studio Gmail App Password and try again.'
-      });
-    }
-
-    return res.json({
-      success: true,
-      message: 'If this address can receive email, a verification code is on its way.'
-    });
+    issueSession(res, user);
+    return res.status(201).json({ success: true, isNewUser: !existingUser, user: publicUser(user) });
   } catch (error) {
-    console.error('[Email OTP] Could not create code:', error.message);
-    return res.status(500).json({ success: false, message: 'Could not start email verification. Please try again.' });
+    if (error?.code === 11000) {
+      return res.status(409).json({ success: false, message: 'An account with this email already exists. Please sign in.' });
+    }
+    console.error('[Customer Registration] Could not create account:', error.message);
+    return res.status(500).json({ success: false, message: 'Could not create your account. Please try again.' });
   }
 });
 
 app.post('/api/auth/login', passwordLoginLimiter, async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const phone = normalizePhone(req.body?.phone);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
   if (!isValidEmail(email) || password.length === 0 || password.length > 128) {
@@ -509,12 +438,19 @@ app.post('/api/auth/login', passwordLoginLimiter, async (req, res) => {
       return res.json({ success: true, user: publicUser(adminUser) });
     }
 
-    const user = await UserModel.findOne({ email }).select('+passwordHash');
-    if (!user?.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
-      return res.status(401).json({ success: false, message: 'Email or password is incorrect. If this is an older account, use “Create account / Forgot password” to verify your email and set a password.' });
+    if (!isValidPhone(phone)) {
+      return res.status(400).json({ success: false, message: 'Customers must enter the phone number used when creating their account.' });
     }
 
-    user.role = getAdminEmails().has(email) ? 'Admin' : 'Client';
+    const user = await UserModel.findOne({ email }).select('+passwordHash');
+    const passwordMatches = user?.passwordHash
+      ? await verifyPassword(password, user.passwordHash)
+      : false;
+    if (!user?.passwordHash || user.phone !== phone || !passwordMatches) {
+      return res.status(401).json({ success: false, message: 'Email, phone number, or password is incorrect. New customers should create an account.' });
+    }
+
+    user.role = 'Client';
     user.lastLoginAt = new Date();
     await user.save();
     issueSession(res, user);
@@ -522,75 +458,6 @@ app.post('/api/auth/login', passwordLoginLimiter, async (req, res) => {
   } catch (error) {
     console.error('[Password Login] Sign-in failed:', error.message);
     return res.status(500).json({ success: false, message: 'Could not sign in. Please try again.' });
-  }
-});
-
-app.post('/api/auth/otp/verify', verifyOtpLimiter, async (req, res) => {
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-  const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
-  const password = req.body?.password;
-  const passwordConfirmation = req.body?.passwordConfirmation;
-  const serviceInterest = typeof req.body?.serviceInterest === 'string'
-    ? req.body.serviceInterest.trim().slice(0, 120)
-    : '';
-
-  if (!isValidEmail(email) || !/^\d{6}$/.test(code) || !isValidPassword(password)) {
-    return res.status(400).json({
-      success: false,
-      message: `Enter the email, six-digit code, and a password between ${MIN_PASSWORD_LENGTH} and 128 characters.`
-    });
-  }
-  if (password !== passwordConfirmation) {
-    return res.status(400).json({ success: false, message: 'The passwords do not match.' });
-  }
-  if (authConfigurationMissing()) {
-    return res.status(503).json({ success: false, message: 'Email sign-in is not configured on the server.' });
-  }
-  if (!isMongoConnected) {
-    return res.status(503).json({ success: false, message: 'Account storage is unavailable. Please try again later.' });
-  }
-
-  try {
-    const otp = await OtpModel.findOne({ email });
-    if (!otp || otp.expiresAt.getTime() <= Date.now() || otp.attempts >= MAX_OTP_ATTEMPTS) {
-      if (otp && (otp.expiresAt.getTime() <= Date.now() || otp.attempts >= MAX_OTP_ATTEMPTS)) {
-        await OtpModel.deleteOne({ _id: otp._id });
-      }
-      return res.status(400).json({ success: false, message: 'That code is invalid or expired. Request a new code.' });
-    }
-
-    const expectedHash = Buffer.from(otp.codeHash, 'hex');
-    const providedHash = Buffer.from(getOtpHash(email, code), 'hex');
-    if (expectedHash.length !== providedHash.length || !timingSafeEqual(expectedHash, providedHash)) {
-      otp.attempts += 1;
-      await otp.save();
-      return res.status(400).json({
-        success: false,
-        message: `Incorrect code. ${MAX_OTP_ATTEMPTS - otp.attempts} attempt(s) remaining.`
-      });
-    }
-
-    await OtpModel.deleteOne({ _id: otp._id });
-    const role = getAdminEmails().has(email) ? 'Admin' : 'Client';
-    const existingUser = await UserModel.findOne({ email });
-    const userUpdates = {
-      name: existingUser?.name || email.split('@')[0],
-      role,
-      passwordHash: await hashPassword(password),
-      lastLoginAt: new Date()
-    };
-    if (serviceInterest) userUpdates.serviceInterest = serviceInterest;
-    const user = await UserModel.findOneAndUpdate(
-      { email },
-      { $set: userUpdates },
-      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
-    );
-
-    issueSession(res, user);
-    return res.json({ success: true, isNewUser: !existingUser, user: publicUser(user) });
-  } catch (error) {
-    console.error('[Email OTP] Verification failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Could not verify the code. Please try again.' });
   }
 });
 
@@ -606,10 +473,15 @@ app.get('/api/auth/session', (req, res) => {
       algorithms: ['HS256'],
       issuer: 'nishiglowstudio'
     });
+    const email = typeof session.email === 'string' ? session.email.toLowerCase() : '';
+    if (session.role === 'Admin' && !getAdminEmails().has(email)) {
+      res.clearCookie(SESSION_COOKIE, getSessionCookieOptions());
+      return res.status(401).json({ success: false, message: 'Session expired. Please sign in again.' });
+    }
     return res.json({
       success: true,
       user: {
-        email: session.email,
+        email,
         name: session.name,
         picture: session.picture,
         role: session.role,
@@ -627,48 +499,52 @@ app.post('/api/auth/logout', (_req, res) => {
   res.json({ success: true });
 });
 
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   const distPath = path.join(__dirname, 'dist');
   app.use(express.static(distPath));
   app.get(/.*/, (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
 }
 
+let initialization;
+export const initializeServer = () => {
+  if (!initialization) {
+    initialization = (async () => {
+      if (process.env.NODE_ENV === 'production') {
+        const missingSettings = [
+          (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) && 'SESSION_SECRET (at least 32 characters)',
+          !process.env.ADMIN_PASSWORD_HASH && 'ADMIN_PASSWORD_HASH',
+          !process.env.MONGODB_URI && 'MONGODB_URI'
+        ].filter(Boolean);
+
+        if (missingSettings.length) {
+          throw new Error(`Missing production configuration: ${missingSettings.join(', ')}`);
+        }
+        await connectDatabase();
+      } else if (process.env.MONGODB_URI) {
+        connectDatabase().catch((error) => {
+          console.error('[MongoDB] Connection failed:', error.message);
+        });
+      }
+    })().catch((error) => {
+      initialization = undefined;
+      throw error;
+    });
+  }
+  return initialization;
+};
+
+export { app };
+
 const startServer = async () => {
-  if (process.env.NODE_ENV === 'production') {
-    const missingSettings = [
-      !process.env.GMAIL_USER && 'GMAIL_USER',
-      !process.env.GMAIL_PASS && 'GMAIL_PASS (Google App Password)',
-      (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) && 'SESSION_SECRET (at least 32 characters)',
-      !process.env.MONGODB_URI && 'MONGODB_URI'
-    ].filter(Boolean);
-
-    if (missingSettings.length) {
-      throw new Error(`Missing production configuration: ${missingSettings.join(', ')}`);
-    }
-    await connectDatabase();
-    await mailer.verify();
-    isSmtpConnected = true;
-  } else if (process.env.MONGODB_URI) {
-    connectDatabase().catch((error) => {
-      console.error('[MongoDB] Connection failed:', error.message);
-    });
-  }
-
-  if (process.env.NODE_ENV !== 'production' && mailer) {
-    mailer.verify().then(() => {
-      isSmtpConnected = true;
-      console.log('[Gmail SMTP] Connected');
-    }).catch((error) => {
-      console.error('[Gmail SMTP] Connection failed:', error.message);
-    });
-  }
-
+  await initializeServer();
   app.listen(PORT, () => {
     console.log(`NISHIGLOWSTUDIO server listening on port ${PORT}`);
   });
 };
 
-startServer().catch((error) => {
-  console.error('[Server] Startup failed:', error.message);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  startServer().catch((error) => {
+    console.error('[Server] Startup failed:', error.message);
+    process.exitCode = 1;
+  });
+}

@@ -4,6 +4,7 @@ import { StudioDataProvider } from './context/StudioDataContext';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import FloatingInstagram from './components/FloatingInstagram';
+import ServiceChatbot from './components/ServiceChatbot';
 import AuthModal from './components/AuthModal';
 
 import HomePage from './pages/HomePage';
@@ -114,6 +115,7 @@ export default function App() {
           </main>
 
           <FloatingInstagram />
+          <ServiceChatbot />
 
           {/* Google sign-in modal for customer accounts and approved studio admins */}
           <AuthModal onSuccessNavigate={(target) => {

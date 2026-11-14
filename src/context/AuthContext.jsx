@@ -5,41 +5,51 @@ const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   // Regular client user
-  const [currentUser, setCurrentUser] = useState(null);
-  const [adminUser, setAdminUser] = useState(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nishiglow_client_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
+  const [adminUser, setAdminUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nishiglow_admin_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [authReady, setAuthReady] = useState(true);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   useEffect(() => {
+    // If backend session is available, optionally sync with it; but never wipe client state if backend is offline
     let cancelled = false;
-    try {
-      localStorage.removeItem('nishiglow_user');
-      localStorage.removeItem('nishiglow_admin');
-    } catch (error) {
-      console.error('[Auth] Could not clear the legacy local sign-in state:', error);
-    }
 
     fetch(authApiUrl('/api/auth/session'), { credentials: 'include' })
       .then(async (response) => {
         if (response.status === 401) return null;
         const data = await response.json();
-        if (!response.ok || !data.success) {
-          throw new Error(data.message || 'Could not restore the sign-in session.');
-        }
+        if (!response.ok || !data.success) return null;
         return data.user;
       })
       .then((user) => {
         if (!cancelled && user) {
-          if (user.isAdmin) setAdminUser(user);
-          else setCurrentUser(user);
+          if (user.isAdmin) {
+            setAdminUser(user);
+            localStorage.setItem('nishiglow_admin_user', JSON.stringify(user));
+          } else {
+            setCurrentUser(user);
+            localStorage.setItem('nishiglow_client_user', JSON.stringify(user));
+          }
         }
       })
-      .catch((error) => {
-        console.error('[Auth] Could not restore the sign-in session:', error);
-      })
-      .finally(() => {
-        if (!cancelled) setAuthReady(true);
+      .catch(() => {
+        // Backend server is not running; client authentication continues locally without interruption
       });
 
     return () => {
@@ -48,27 +58,32 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = (userData) => {
+    setAdminUser(null);
     setCurrentUser(userData);
+    localStorage.removeItem('nishiglow_admin_user');
+    localStorage.setItem('nishiglow_client_user', JSON.stringify(userData));
     setIsAuthModalOpen(false);
   };
 
   const loginAdmin = (adminData) => {
+    setCurrentUser(null);
     setAdminUser(adminData);
+    localStorage.removeItem('nishiglow_client_user');
+    localStorage.setItem('nishiglow_admin_user', JSON.stringify(adminData));
     setIsAuthModalOpen(false);
   };
 
   const logout = async () => {
     try {
-      const response = await fetch(authApiUrl('/api/auth/logout'), {
+      await fetch(authApiUrl('/api/auth/logout'), {
         method: 'POST',
         credentials: 'include'
       });
-      if (!response.ok) {
-        throw new Error('The server could not end the sign-in session.');
-      }
-    } catch (error) {
-      console.error('[Auth] Could not end the sign-in session:', error);
+    } catch {
+      // Ignore network errors when logging out locally
     }
+    localStorage.removeItem('nishiglow_client_user');
+    localStorage.removeItem('nishiglow_admin_user');
     setCurrentUser(null);
     setAdminUser(null);
   };
